@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken, InvalidSignature
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -8,13 +8,20 @@ import os
 import base64
 from itertools import cycle
 import getpass
-import binascii
+import sys
 
 def generate_key(key_file):
     """Generates a key and saves it into a file"""
     key = Fernet.generate_key()
-    with open(key_file, "wb") as key_file:
-        key_file.write(key)
+    try:
+        with open(key_file, "wb") as key_file:
+            key_file.write(key)
+    except PermissionError:
+        print("Error: Permission denied. You do not have the necessary permissions to write to the file.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 def generate_key_from_password(password_provided, salt):
     """Generates a Fernet key from a provided password."""
@@ -30,7 +37,18 @@ def generate_key_from_password(password_provided, salt):
 
 def load_key(key_file):
     """Loads the previously generated key"""
-    return open(key_file, "rb").read()
+    print(f"Loading key from {key_file}")
+    try:
+        return open(key_file, "rb").read()
+    except FileNotFoundError:
+        print("Error: The file was not found. Please check the file path.")
+        sys.exit(1)
+    except PermissionError:
+        print("Error: Permission denied. You do not have the necessary permissions to read the file.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 def obfuscate_data(data, key, insert_dummy_every=10):
     """Obfuscates data by shuffling bytes, inserting dummy data, and XORing with a key-derived sequence"""
@@ -79,34 +97,78 @@ def encrypt_file(input_file_name, output_file_name, key, salt=None):
     """Encrypts and obfuscates a file"""
     fernet = Fernet(key)
     
-    with open(input_file_name, "rb") as file:
-        file_data = file.read()
-        encrypted_data = fernet.encrypt(file_data)
-        if salt:
-            obfuscated_data = salt + obfuscate_data(encrypted_data, key)
-        else:
-            obfuscated_data = obfuscate_data(encrypted_data, key)
+    try:
+        with open(input_file_name, "rb") as file:
+            file_data = file.read()
+            encrypted_data = fernet.encrypt(file_data)
+            if salt:
+                obfuscated_data = salt + obfuscate_data(encrypted_data, key)
+            else:
+                obfuscated_data = obfuscate_data(encrypted_data, key)
+    except FileNotFoundError:
+        print("Error: The file was not found. Please check the file path.")
+        sys.exit(1)
+    except PermissionError:
+        print("Error: Permission denied. You do not have the necessary permissions to read the file.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
-    with open(output_file_name, "wb") as file:
-        file.write(obfuscated_data)
+    try:
+        with open(output_file_name, "wb") as file:
+            file.write(obfuscated_data)
+    except PermissionError:
+        print("Error: Permission denied. You do not have the necessary permissions to write to the file.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 def decrypt_file(input_file_name, output_file_name, key=None, password=None):
     """Deobfuscates and decrypts a file"""
     
-    with open(input_file_name, "rb") as file:
-        if password:
-            salt = file.read(16)
-            key = generate_key_from_password(password, salt)
-            fernet = Fernet(key)
-            obfuscated_data = file.read()
-        else:
-            fernet = Fernet(key)
-            obfuscated_data = file.read()
-        deobfuscated_data = deobfuscate_data(obfuscated_data, key)
-        decrypted_data = fernet.decrypt(deobfuscated_data)
-
-    with open(output_file_name, "wb") as file:
-        file.write(decrypted_data)
+    try:
+        with open(input_file_name, "rb") as file:
+            if password:
+                salt = file.read(16)
+                key = generate_key_from_password(password, salt)
+                fernet = Fernet(key)
+                obfuscated_data = file.read()
+            else:
+                fernet = Fernet(key)
+                obfuscated_data = file.read()
+            deobfuscated_data = deobfuscate_data(obfuscated_data, key)
+            try:
+                decrypted_data = fernet.decrypt(deobfuscated_data)
+            except InvalidToken:
+                print("Decryption failed: Invalid key or password.")
+                sys.exit(2)
+            except InvalidSignature:
+                print("Decryption failed: Invalid signature.")
+                sys.exit(2)
+            except Exception as e:
+                print(f"Decryption failed: {e}")
+                sys.exit(2)
+    except FileNotFoundError:
+        print("Error: The file was not found. Please check the file path.")
+        sys.exit(1)
+    except PermissionError:
+        print("Error: Permission denied. You do not have the necessary permissions to read the file.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
+    
+    try:
+        with open(output_file_name, "wb") as file:
+            file.write(decrypted_data)
+    except PermissionError:
+        print("Error: Permission denied. You do not have the necessary permissions to write to the file.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 def main():
     # Initialize variables
@@ -157,7 +219,6 @@ def main():
         print("No key or password provided.")
         return
     
-    print(binascii.hexlify(password.encode()))
     if args.decrypt_file:
         output_file = args.output_file if args.output_file else "output.dec"
         decrypt_file(args.decrypt_file, output_file, key, password)
